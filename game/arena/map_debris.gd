@@ -189,6 +189,8 @@ func _fly(kind: String, tint: Color, size: Vector3, xf: Transform3D, velocity: V
 	body.global_transform = xf
 	body.linear_velocity = velocity
 	body.angular_velocity = spin
+	if not WorldGravity.zones.is_empty():
+		body.gravity_scale = WorldGravity.zone_at(xf.origin)   # (a map whose gravity differs by place: outside a tower in orbit rubble drifts)
 	_flying.append({"body": body, "kind": kind, "size": size, "tint": tint, "born": _now()})
 
 
@@ -315,7 +317,10 @@ func _physics_process(_delta: float) -> void:
 	for i in range(_flying.size() - 1, -1, -1):
 		var f: Dictionary = _flying[i]
 		var body: RigidBody3D = f.body
-		if body.global_position.y < -80.0:
+		if not WorldGravity.zones.is_empty():
+			body.gravity_scale = WorldGravity.zone_at(body.global_position)
+		# (Away below the map, or still falling through the open after all this time: it is gone.)
+		if body.global_position.y < -80.0 or (now - f.born > REST_AFTER and body.linear_velocity.y < -3.0):
 			body.queue_free()
 			_flying.remove_at(i)
 		elif (body.sleeping and now - f.born > 0.5) or now - f.born > REST_AFTER:

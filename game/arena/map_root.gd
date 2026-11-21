@@ -92,6 +92,10 @@ extends Node3D
 ## square metres or more, where it otherwise takes 7): the bits of wall between a
 ## tower's window slits go like the rest of it.
 @export var break_small_walls := false
+## With fine destruction: how thick a wall or floor can be and still break (0.6 m
+## unless this says more). What is thicker than 0.6 m breaks in bigger pieces, and only
+## explosives and heavy blows do it: small arms mark it, and nothing shoots through.
+@export var break_thickness := 0.6
 ## Tick this if a walkable floor winds up over itself, like a spiral stair in a tower
 ## (Cirrus's clock tower): the bots' navigation mesh is then cut up a way that keeps
 ## such a stair. Leave it off otherwise: the usual way makes tidier paths in the open.
@@ -268,10 +272,11 @@ func build(with_meshes: bool = true) -> void:
 	_trail = []
 	_framed = []
 	_frame_of = {}
+	_frames_now = []
 	_framing = 0
 	collapses = []
 	_mover_frames = {}
-	var building: MapFrame = null
+	var buildings: Array[MapFrame] = []
 	for child in get_children():
 		var f := child as MapFrame
 		if f == null and child is MapMover:   # (a building on a flying island: the frame is inside it)
@@ -279,16 +284,15 @@ func build(with_meshes: bool = true) -> void:
 				if inner is MapFrame and not _mover_frames.has(child):
 					f = inner
 					_mover_frames[child] = inner
-		elif f and building == null:
-			building = f
-		else:
-			f = null
+		elif f:
+			buildings.append(f)   # (a map can have several: each has its own parts, or its own Claim of shared ones)
 		if f:
 			for path in f.parts:
 				var part := f.get_node_or_null(path)
 				if part:
-					_framed.append(part)
-					_frame_of[part] = f
+					if not _framed.has(part):
+						_framed.append(part)
+					(_frame_of.get_or_add(part, []) as Array).append(f)
 	_collect(self, Transform3D.IDENTITY, pieces, spawns)
 	# Gravity by place (none on most maps: then it is 1.0 everywhere, whatever the
 	# last map said).
@@ -314,11 +318,15 @@ func build(with_meshes: bool = true) -> void:
 			debris = MapDebris.new()
 			add_child(debris)
 			debris.setup(self, destruction)
-		if fine_destruction and building:
-			collapse = MapCollapse.new()
-			collapses.append(collapse)
-			add_child(collapse)
-			pieces = collapse.setup(self, building, pieces)
+		if fine_destruction:
+			for building in buildings:
+				var c := MapCollapse.new()
+				c.index = collapses.size()
+				collapses.append(c)
+				add_child(c)
+				pieces = c.setup(self, building, pieces)
+				if collapse == null:
+					collapse = c
 	for i in movers.size():
 		_build_mover(i, with_meshes)   # (after the breakables: a mover's own ride on it)
 	if movers.is_empty():
@@ -390,8 +398,9 @@ static var current: MapRoot
 
 var _framed: Array = []   # build(): the nodes whose blocks are a MapFrame's building
 var _framing := 0
-var _frame_of := {}       # build(): each of those nodes -> its MapFrame
-var _frame_now: MapFrame  # ...and the one _collect is inside of (while _framing > 0)
+var _frame_of := {}       # build(): each of those nodes -> its MapFrames (several can share a part: see MapFrame.claim)
+var _frames_now: Array = []   # ...and the ones _collect is inside of (while _framing > 0)
+var _part_now: Node = null    # ...and the part it is inside of
 var _surfaces := {}   # Vector2i bucket -> [a surface (see _surface_of)]
 
 ## Decoration counts as what is underfoot when it lies flat: no thicker than this...
@@ -721,15 +730,26 @@ func _collect(node: Node, xf: Transform3D, pieces: Array, spawn_list: Array, mov
 			_collect(child, Transform3D.IDENTITY, m.pieces, spawn_list, movers.size() - 1)
 			continue
 		var in_frame := _framed.has(child)
+		var frames_before := _frames_now
+		var part_before := _part_now
 		if in_frame:
 			_framing += 1
-			_frame_now = _frame_of[child]
+			_frames_now = _frame_of[child]
+			_part_now = child
 		if child is MapBlock:
 			var piece := (child as MapBlock).to_piece(at)
 			pieces.append(piece)
+			var f: MapFrame = null
 			if _framing > 0:
+				for candidate: MapFrame in _frames_now:
+					if candidate.claims(at.origin):
+						f = candidate
+						break
+			if f:
 				piece["framed"] = true   # part of a building that can come down (see MapFrame)
-				if _frame_now.held_by_walls:
+				piece["frame"] = f
+				piece["part"] = _part_now   # (which of the frame's parts it is under: see MapFrame.spans)
+				if f.held_by_walls:
 					piece["unguarded"] = true   # (nothing of it is kept from breaking: see MapCollapse._take_rests)
 				if not _framed.has(node):
 					piece["group"] = node.get_instance_id()   # (the blocks of one thing, a girder say: they fall as one)
@@ -761,6 +781,8 @@ func _collect(node: Node, xf: Transform3D, pieces: Array, spawn_list: Array, mov
 		_collect(child, at, pieces, spawn_list, mover)
 		if in_frame:
 			_framing -= 1
+			_frames_now = frames_before
+			_part_now = part_before
 
 
 ## A mover's body is due to be mended (an island on its way back up: see

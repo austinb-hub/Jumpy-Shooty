@@ -55,6 +55,14 @@ extends Resource
 		breakable = v
 		emit_changed()
 
+## kind -> how much bigger than usual its pieces are where the map breaks fine (see
+## MapDestruction: 2 = twice as far across). For a very big map, whose floors would
+## otherwise be cut into more pieces than it can carry.
+@export var break_scale: Dictionary[String, float] = {}:
+	set(v):
+		break_scale = v
+		emit_changed()
+
 ## kind -> what it is made of (the names are in BlockMaterials.TABLE: concrete,
 ## metal, wood, glass...): its footsteps and how it breaks. Leave a kind out and it
 ## is guessed from the kind's name. A block's own Material Type wins over this.

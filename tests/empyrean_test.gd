@@ -16,7 +16,8 @@ extends SceneTree
 ##    ring gates, 2 s to open, 30 s open, 2 s to close, 60 s cooldown;
 ##  - three or four tractor-beam lifts at 9 m/s, each several tiers tall, each with a
 ##    bots' link to every floor it passes;
-##  - the Engine's core is a hazard; the stained glass is the only thing that breaks;
+##  - the Engine's core is a hazard; the stained glass breaks (the rest of what breaks:
+##    tests/empyrean_destruction_test.gd);
 ##  - the shaft's grapple anchors are never more than 35 m apart; drones are scenery;
 ##  - routes, on the bots' navigation mesh: every tier from the one below and the one
 ##    above, every storey of a tier, the balconies, the docking ring, the gallery; the
@@ -446,8 +447,12 @@ func _breaks() -> void:
 	var kinds := {}
 	for panel in d.panels:
 		kinds[panel.kind] = true
-	_expect(kinds.keys() == ["glass_stained"], "only the stained glass breaks (%s)" % [kinds.keys()])
-	_expect(d.breakable_count() >= 6, "several windows (%d pieces)" % d.breakable_count())
+	var panes := 0
+	for panel in d.panels:
+		if panel.kind == "glass_stained":
+			panes += 1
+	_expect(kinds.has("glass_stained") and kinds.has("stone") and kinds.has("stone_floor"), "the stained glass breaks, and the tower's stone (%s)" % [kinds.keys()])
+	_expect(panes >= 6, "several windows (%d)" % panes)
 
 
 func _walk(nav: RID, from: Vector3, to: Vector3) -> float:

@@ -41,9 +41,21 @@ static func build(pieces: Array, shade: Vector3 = Vector3.ONE, shade_basis: Basi
 ## draws them merged (MapRoot's editor drawing), since a GPU mesh for each of a big
 ## map's thousands of blocks runs some graphics drivers out of buffers.
 static func build_arrays(pieces: Array, shade: Vector3 = Vector3.ONE, shade_basis: Basis = Basis()) -> Dictionary:
+	var by_kind := {}
+	add_to(by_kind, pieces, shade, shade_basis)
+	var result := {}
+	for kind in by_kind:
+		result[kind] = surface_arrays(by_kind[kind])
+	return result
+
+
+## Draws `pieces` into the buffers in `by_kind` (kind -> buffer, see _buffer; {} to
+## begin with), adding to what is there: a build done a few pieces at a time
+## (MapCollapse draws a bay's loose things over several frames). meshes() makes the
+## meshes of it.
+static func add_to(by_kind: Dictionary, pieces: Array, shade: Vector3 = Vector3.ONE, shade_basis: Basis = Basis()) -> void:
 	_shade = shade
 	_shade_basis = shade_basis
-	var by_kind := {}
 	_by_kind = by_kind
 	for piece in pieces:
 		if piece.get("hidden", false):
@@ -64,9 +76,16 @@ static func build_arrays(pieces: Array, shade: Vector3 = Vector3.ONE, shade_basi
 	_face_kinds = {}
 	_face_patterns = {}
 	_custom = Vector4.ZERO
+
+
+## kind -> a mesh, from the buffers add_to() filled.
+static func meshes(by_kind: Dictionary) -> Dictionary:
 	var result := {}
 	for kind in by_kind:
-		result[kind] = surface_arrays(by_kind[kind])
+		var arrays := surface_arrays(by_kind[kind])
+		var mesh := ArrayMesh.new()
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, surface_flags(arrays))
+		result[kind] = mesh
 	return result
 
 
@@ -184,6 +203,17 @@ static func _put_custom(buf: Array, count: int) -> void:
 		custom.append(_custom.z)
 		custom.append(_custom.w)
 	buf[3] = custom
+
+
+## Blanks `count` corners of a mesh from `first` on, in place: they are all put at one
+## point, so the faces they made are no longer drawn. For something drawn as part of a
+## big mesh that is gone now (a thing fallen with its floor, a panel with its first
+## hole in it): the big mesh need not be made again, which is slow. (A surface's
+## corners come first in its vertex data, three 32-bit numbers each.)
+static func blank(mesh: ArrayMesh, first: int, count: int) -> void:
+	var none := PackedByteArray()
+	none.resize(count * 12)
+	mesh.surface_update_vertex_region(0, first * 12, none)
 
 
 ## The same mesh, marked as part of something that moves (a MapMover's body): its

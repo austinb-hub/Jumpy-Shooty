@@ -119,7 +119,29 @@ surface_scale = 1.2
 surface_strength = 0.9
 roughness = 0.82
 breakable = Dictionary[String, float]({
-"glass_stained": 25.0
+"alloy_floor": 300.0,
+"brass": 120.0,
+"catwalk": 140.0,
+"floor_engine": 260.0,
+"floor_labs": 260.0,
+"floor_library": 260.0,
+"floor_menagerie": 260.0,
+"floor_observatory": 260.0,
+"floor_summoning": 260.0,
+"glass_stained": 25.0,
+"stone": 200.0,
+"stone_dark": 220.0,
+"stone_floor": 260.0
+})
+break_scale = Dictionary[String, float]({
+"alloy_floor": 1.6,
+"floor_engine": 1.6,
+"floor_labs": 1.6,
+"floor_library": 1.6,
+"floor_menagerie": 1.6,
+"floor_observatory": 1.6,
+"floor_summoning": 1.6,
+"stone_floor": 1.6
 })
 material = Dictionary[String, String]({
 "alloy": "metal",

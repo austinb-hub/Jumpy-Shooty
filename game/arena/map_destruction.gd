@@ -48,6 +48,8 @@ const CELL := 2.0            ## metres: about how big a piece breaks off
 const MAX_THICKNESS := 0.6   ## a wall or floor this thin or thinner can break
 const MIN_AREA := 7.0        ## ...and at least this big (small landings and steps stay)
 const SMALL_AREA := 0.4      ## ...or this big, in a building held up by its walls (MapFrame): every bit of wall breaks there
+const THICK_CELL := 1.5      ## fine: a wall or floor thicker than MAX_THICKNESS (MapRoot.break_thickness lets one break) breaks in pieces this much bigger...
+const THICK_ARMOUR := 60.0   ## ...and a hit weaker than this does nothing to it (small arms only mark it), whatever it is made of
 const ONE_PIECE_BELOW := 50.0  ## kinds weaker than this (glass) shatter as one pane
 const SPAWN_GUARD := 3.0     ## metres round a spawn point nothing breaks
 const BROKEN := 3            ## stages: 0 whole, 1 cracked, 2 badly cracked, 3 broken
@@ -74,7 +76,9 @@ const SLAM_REACH := 1.1       ## fine: metres round a ground slam that go throug
 const HEALTH_SPREAD := 0.5    ## fine: one cell is up to this much tougher than the next (a ragged hole, not a round one)
 const CUT_SHADE := 0.7       ## fine: how dark the broken edge of a panel is drawn
 const CRACK_SHADE := [1.0, 0.8, 0.62]
+const LOT := 32.0             ## metres: fine panels that stand whole are drawn together, in lots this big (see _draw_lots)
 const MAX_DEBRIS := 140
+const PANEL_BUCKET := 6.0     ## metres: the size of the buckets pieces are matched to panels in
 
 ## Every panel: {xf, size, kind, tint, n: Vector3i, cell: Vector3, first: int (first
 ## cell index), body: StaticBody3D, meshes: Node3D, skins: [{kind, tint, box: AABB}], thin: int,
@@ -148,11 +152,25 @@ func _take(pieces: Array, spawn_points: Array, frame: Node3D) -> Array:
 		_add_panel(piece, health_of(piece, table), whole, frame)
 		if whole:
 			whole_pieces.append(piece)
+	# (Where the new panels are, in buckets: a big map has thousands of them, and tens of
+	# thousands of pieces that might lie on one.)
+	var buckets := {}
+	for i in range(first_panel, panels.size()):
+		var reach: AABB = ((panels[i].xf as Transform3D) * AABB(-(panels[i].size as Vector3) * 0.5, panels[i].size)).grow(0.2)
+		var lo := Vector3i((reach.position / PANEL_BUCKET).floor())
+		var hi := Vector3i((reach.end / PANEL_BUCKET).floor())
+		for x in range(lo.x, hi.x + 1):
+			for y in range(lo.y, hi.y + 1):
+				for z in range(lo.z, hi.z + 1):
+					(buckets.get_or_add(Vector3i(x, y, z), []) as Array).append(i)
+	var near_of := {}   # index in keep -> the panels it might lie on, lowest first
 	for k in keep.size():
 		var p: Dictionary = keep[k]
 		if p.solid or p.get("hidden", false) or p.shape != "box":
 			continue
-		for i in range(first_panel, panels.size()):
+		var near := _panels_near(buckets, (p.xf as Transform3D) * AABB(-(p.size as Vector3) * 0.5, p.size))
+		near_of[k] = near
+		for i: int in near:
 			if panels[i].whole:
 				continue
 			var box := _skin_box(panels[i], p)
@@ -168,12 +186,57 @@ func _take(pieces: Array, spawn_points: Array, frame: Node3D) -> Array:
 		if p.solid or p.get("hidden", false) or p.shape != "box":
 			rest.append(p)
 		else:
-			rest.append_array(_share_band(p, first_panel))
+			rest.append_array(_share_band(p, near_of[k]))
 	# Whole blocks count as things resting on a floor: a floor under a crate holds.
 	_protect(rest + whole_pieces, spawn_points, first_cell, first_panel)
 	for i in range(first_panel, panels.size()):
+		if panels[i].fine and panels[i].frame == null:
+			panels[i]["lot"] = []   # (drawn with the panels round it while it is whole: see _draw_lots)
 		_rebuild_panel(i)
+	_draw_lots(first_panel)
 	return rest
+
+
+## Draws the fine panels from `first_panel` on that stand still, whole: all those in
+## each cube of LOT metres as one mesh for each kind, like the rest of the map, in
+## place of a mesh or two for every panel (a map can have thousands: Empyrean Tower's
+## 1,900 were five thousand draw calls a frame). Each panel knows where in those
+## meshes it is ("lot": [[mesh, its first corner, how many]...]); the first time it is
+## drawn with a hole in it, it is blanked there and drawn on its own from then on
+## (_rebuild_meshes). Panels that ride a mover are drawn on their own from the start.
+func _draw_lots(first_panel: int) -> void:
+	if DisplayServer.get_name() == "headless" and not root.has_meshes:
+		return
+	var lots := {}   # which cube -> {"drawn": kind -> buffer, "sizes": kind -> corners so far, "spans": [[panel, kind, first corner, how many]]}
+	for index in range(first_panel, panels.size()):
+		var panel: Dictionary = panels[index]
+		if not panel.has("lot"):
+			continue
+		var keys := PackedByteArray()
+		keys.resize(int(panel.nu) * int(panel.nv))
+		keys.fill(1)
+		var lot: Dictionary = lots.get_or_add(Vector3i(((panel.xf as Transform3D).origin / LOT).floor()), {"drawn": {}, "sizes": {}, "spans": []})
+		var drawn: Dictionary = lot.drawn
+		MapMesher.add_to(drawn, _flat_pieces(panel, keys), root.face_shade)
+		for kind: String in drawn:
+			var now := (drawn[kind][0] as PackedVector3Array).size()
+			var was := int(lot.sizes.get(kind, 0))
+			if now > was:
+				(lot.spans as Array).append([index, kind, was, now - was])
+				lot.sizes[kind] = now
+	for at: Vector3i in lots:
+		var holder := Node3D.new()
+		holder.name = "Lot_%d_%d_%d" % [at.x, at.y, at.z]
+		add_child(holder)
+		var meshes := MapMesher.meshes(lots[at].drawn)
+		for kind: String in meshes:
+			var node := MeshInstance3D.new()
+			node.name = "Mesh_%s" % kind
+			node.mesh = meshes[kind]
+			node.material_override = root.material_for(kind)
+			holder.add_child(node)
+		for span: Array in lots[at].spans:
+			(panels[span[0]].lot as Array).append([meshes[span[1]], span[2], span[3]])
 
 
 func _can_break(piece: Dictionary, table: Dictionary) -> bool:
@@ -188,11 +251,11 @@ func _can_break(piece: Dictionary, table: Dictionary) -> bool:
 		var up: Vector3 = (piece.xf as Transform3D).basis.y.abs()
 		var s: Vector3 = piece.size
 		small = s.y > minf(s.x, s.z) and up.y > 0.99   # (a wall: thin sideways, not a floor)
-	return thin_enough_piece(piece, SMALL_AREA if small else MIN_AREA)
+	return thin_enough_piece(piece, SMALL_AREA if small else MIN_AREA, maxf(root.break_thickness, MAX_THICKNESS) if fine else MAX_THICKNESS)
 
 
-static func thin_enough_piece(piece: Dictionary, area: float = MIN_AREA) -> bool:
-	return piece.shape == "box" and _thin(piece.size, area)
+static func thin_enough_piece(piece: Dictionary, area: float = MIN_AREA, thickness: float = MAX_THICKNESS) -> bool:
+	return piece.shape == "box" and _thin(piece.size, area, thickness)
 
 
 ## Can a block of this shape and size break per cell? (MapBlock's warning asks.)
@@ -200,11 +263,11 @@ static func thin_enough(shape: int, size: Vector3) -> bool:
 	return shape == MapBlock.Shape.BOX and _thin(size)
 
 
-static func _thin(s: Vector3, area: float = MIN_AREA) -> bool:
+static func _thin(s: Vector3, area: float = MIN_AREA, thickness: float = MAX_THICKNESS) -> bool:
 	var dims := [s.x, s.y, s.z]
 	dims.sort()
 	# (A size is held in single precision, where 0.6 is a hair over 0.6.)
-	return dims[0] <= MAX_THICKNESS + 0.001 and dims[1] * dims[2] >= area
+	return dims[0] <= thickness + 0.001 and dims[1] * dims[2] >= area
 
 
 ## How much damage a cell of this piece takes: its own health, else its kind's
@@ -250,6 +313,17 @@ func _add_panel(piece: Dictionary, toughness: float, whole: bool = false, frame:
 	var n := Vector3i.ONE
 	var cut := toughness >= ONE_PIECE_BELOW and not whole   # (else one pane, or one block)
 	var style: Dictionary = fine_style(piece.kind, mat, root.palette, toughness) if fine and cut else {}
+	if not style.is_empty():
+		# Bigger pieces: where the map's palette says so for this kind, and in anything
+		# thicker than usually breaks (which small arms only mark, and no round goes through).
+		var bigger: float = root.palette.break_scale.get(piece.kind, 1.0) if root.palette else 1.0
+		var thick := s[thin] > MAX_THICKNESS + 0.001
+		if thick or bigger != 1.0:
+			style = style.duplicate()
+			style.cell = (style.cell as Vector2) * bigger * (THICK_CELL if thick else 1.0)
+			if thick:
+				style.armour = maxf(float(style.armour), THICK_ARMOUR)
+				style.stop = INF
 	if cut:
 		for a in 3:
 			if a != thin:
@@ -310,6 +384,22 @@ func _add_panel(piece: Dictionary, toughness: float, whole: bool = false, frame:
 	panel.meshes = meshes
 
 
+## The panels in `buckets` (see _take) that a box reaches the neighbourhood of, lowest
+## number first.
+func _panels_near(buckets: Dictionary, box: AABB) -> Array:
+	var lo := Vector3i((box.position / PANEL_BUCKET).floor())
+	var hi := Vector3i((box.end / PANEL_BUCKET).floor())
+	var found := {}
+	for x in range(lo.x, hi.x + 1):
+		for y in range(lo.y, hi.y + 1):
+			for z in range(lo.z, hi.z + 1):
+				for i: int in buckets.get(Vector3i(x, y, z), []):
+					found[i] = true
+	var near := found.keys()
+	near.sort()
+	return near
+
+
 ## `piece` as a box in the panel's frame, if it is a skin of that panel: thin, lying
 ## flat against one of its big faces, square to it, and within its outline.
 func _skin_box(panel: Dictionary, piece: Dictionary) -> AABB:
@@ -338,7 +428,7 @@ func _skin_box(panel: Dictionary, piece: Dictionary) -> AABB:
 ## panel takes the length of it that lies on it as a skin, and what is left over (past
 ## a corner, across an opening) comes back as pieces of its own, to be drawn as before.
 ## A piece that is no such band comes back whole.
-func _share_band(piece: Dictionary, first_panel: int) -> Array:
+func _share_band(piece: Dictionary, near: Array) -> Array:
 	var size: Vector3 = piece.size
 	var along := 0   # its long axis, in its own frame
 	for a in 3:
@@ -348,7 +438,7 @@ func _share_band(piece: Dictionary, first_panel: int) -> Array:
 		return [piece]
 	var pxf: Transform3D = piece.xf
 	var spans: Array = []   # [from, to (along it, from its middle), panel, the skin's box]
-	for i in range(first_panel, panels.size()):
+	for i: int in near:
 		var panel: Dictionary = panels[i]
 		if panel.whole or not panel.fine:
 			continue
@@ -931,6 +1021,12 @@ func _rebuild_meshes(index: int) -> void:
 	_dirty.erase(index)
 	if DisplayServer.get_name() == "headless" and not root.has_meshes:
 		return
+	if panel.has("lot"):
+		if not _fine_gone(panel, true).has(1):
+			return   # (whole, as it is drawn in its lot: see _draw_lots)
+		for at: Array in panel.lot:
+			MapMesher.blank(at[0], at[1], at[2])
+		panel.erase("lot")
 	if panel.fine:
 		_fine_meshes(panel)
 		return
@@ -984,6 +1080,23 @@ func _rebuild_whole_meshes(panel: Dictionary) -> void:
 	var meshes := MapMesher.build([piece], root.face_shade)
 	for kind in meshes:
 		holder.add_child(_drawn(panel, kind, meshes[kind]))
+
+
+## The cells of a fine panel marked 1 in `keys` (one for each cell across its face), as
+## the few boxes they make, with the skins over them cut to match: pieces to draw.
+func _flat_pieces(panel: Dictionary, keys: PackedByteArray) -> Array:
+	var pieces := []
+	var xf: Transform3D = panel.xf
+	for box in _merge_flat(panel.nu, panel.nv, keys, 1):
+		var local := _flat_extent(panel, box)
+		pieces.append(painted(panel, {"xf": xf * Transform3D(Basis(), local.get_center()), "size": local.size,
+			"kind": panel.kind, "shape": "box", "tint": panel.tint}))
+		for skin in panel.skins:
+			var clipped := _clip_skin(panel, skin.box, local)
+			if clipped.has_volume():
+				pieces.append({"xf": xf * Transform3D(Basis(), clipped.get_center()), "size": clipped.size,
+					"kind": skin.kind, "shape": "box", "tint": skin.tint})
+	return pieces
 
 
 ## One of a panel's meshes, ready to draw. On a panel that rides a mover the kind's
@@ -1325,15 +1438,7 @@ func _fine_meshes(panel: Dictionary) -> void:
 						var shade := CUT_SHADE if open[k] == 2 else 1.0
 						MapMesher._flat(MapMesher.face_buffer(extra, own, layer[0], side.normalized()), xf, [far[k], far[k2], near[k2], near[k]],
 							side.normalized(), Color(colour.r * shade, colour.g * shade, colour.b * shade, colour.a))
-	for box in _merge_flat(nu, nv, keys, 1):
-		var local := _flat_extent(panel, box)
-		pieces.append(painted(panel, {"xf": xf * Transform3D(Basis(), local.get_center()), "size": local.size,
-			"kind": panel.kind, "shape": "box", "tint": tint}))
-		for skin in panel.skins:
-			var clipped := _clip_skin(panel, skin.box, local)
-			if clipped.has_volume():
-				pieces.append({"xf": xf * Transform3D(Basis(), clipped.get_center()), "size": clipped.size,
-					"kind": skin.kind, "shape": "box", "tint": skin.tint})
+	pieces.append_array(_flat_pieces(panel, keys))
 	var holder: Node3D = panel.meshes
 	var meshes := MapMesher.build(pieces, root.face_shade)
 	for kind in extra:

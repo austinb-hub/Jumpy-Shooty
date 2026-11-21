@@ -21,6 +21,10 @@ extends Node3D
 ## The parts of the map that are the building (its floors, walls, columns and what
 ## stands on them): only blocks under these can fall. (Paths from this node.)
 @export var parts: Array[NodePath] = []
+## Only the blocks under `parts` whose middle is inside this box are this building's
+## (empty: all of them). For a map with several buildings that share parts: a tower
+## whose storeys are each a building of their own, one over another.
+@export var claim := AABB()
 ## Where the lines of columns are, along x and along z (metres, in the map or the mover).
 @export var lines_x := PackedFloat32Array()
 @export var lines_z := PackedFloat32Array()
@@ -54,3 +58,17 @@ extends Node3D
 ## (Held By Walls) A thing goes once this share of what it stands on, or hangs from,
 ## has broken.
 @export_range(0.1, 1.0) var rests_share := 0.5
+
+## (To The Ground) Parts that span open space at the height of the ground floor (a
+## bridge over a shaft: one of `parts`): they belong to the ground storey and come down
+## with it, where the ground floor itself only breaks.
+@export var spans: Array[NodePath] = []
+## (Held By Walls) A section of a floor (a bay's, at one level) caves in, with the walls
+## under it and all there is above it in the bay, once this share of the floor itself
+## has been broken, whatever holds it up: a ceiling shot half away comes down. 0: never.
+@export_range(0.0, 1.0) var cave_share := 0.0
+
+
+## Is a block whose middle is at `at` (in the map, or the mover) one of this building's?
+func claims(at: Vector3) -> bool:
+	return claim.size == Vector3.ZERO or claim.has_point(at)

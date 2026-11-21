@@ -5,6 +5,9 @@ extends SceneTree
 ##
 ##   tools/perf/draw_load.sh --map=empyrean
 ##
+## --arena: as an arena match has it, with what breaks set up to break (a map with fine
+## destruction is then drawn in more, smaller meshes).
+##
 ## The numbers come from a software renderer, so they say how much work there is, not
 ## how fast a real card does it: use them to compare maps, or one map before and after.
 var _map: MapRoot
@@ -23,6 +26,7 @@ func _initialize() -> void:
 		if a.begins_with("--map="):
 			id = a.trim_prefix("--map=")
 	_map = Maps.make(id)
+	_map.destructible = "--arena" in OS.get_cmdline_user_args()
 	root.add_child(_map)
 	_map.build(true)
 	_cam = Camera3D.new()

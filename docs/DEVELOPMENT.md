@@ -229,7 +229,7 @@ Quick checks:
 - Empyrean Tower (`tests/empyrean_test.gd`): no two faces that would flicker, the river
   of magic clear of everything in the shaft, how it asks to be drawn, no bounds and the burn layer, the gravity
   zones, force fields that stop nothing, spawn points (none sees the altar) and pickups,
-  the altar, four pairs of gates and the lifts, only the glass breaks, and on the bots'
+  the altar, four pairs of gates and the lifts, the glass breaks, and on the bots'
   navigation mesh every tier from its neighbours, every storey, the docking ring and the
   altar from six directions; and in a real Practice match
   (`tests/empyrean_play_test.gd`): gravity through a doorway, a lift ride, the magic
@@ -237,7 +237,14 @@ Quick checks:
   wall, through glass), the whole
   Portal Surge (what cancels the hold, both ways through a gate with speed carried, a
   rocket flying straight through, the portal gun beside it, closing after 30 s, the
-  cooldown), and the three deaths (the core, the burn layer, not flying off);
+  cooldown), and the three deaths (the core, the burn layer, not flying off); and what
+  breaks and falls (`tests/empyrean_destruction_test.gd`): its stone and floors break
+  and none of it is kept from breaking, the outer wall breaks under a rocket but not
+  small arms, each tier has a collapse of its own, a stretch of wall gone brings down
+  the section over it in that tier only (nobody spawns under it, they do a tier up), a
+  bridge over the shaft caves in without the rooms beside it, a piece weighs what
+  things weigh where it falls, and a copy that is told afterwards what broke and what
+  fell (as a late joiner is) has the very same heaps in the same tiers;
 - menu layout (`tests/ui_layout_test.gd`): builds every menu page (main menu and its
   pages, the four Settings tabs, lobby, results, pause, loadout) at 18 window sizes
   and shapes (960x540 to 4K, 16:10, 21:9, 32:9, 4:3, 5:4, tall and tiny windows) and
@@ -384,7 +391,9 @@ The sync, match and bot tests take a map and a player count, for example
   (`tests/run_collapse_test.sh`, laggy network) the host blows out the corner column
   (`--blow-column`), one spectator joins during the fall and one after, and all four
   copies end with the same heap and the same walls and floors gone
-  (`MAP=cirrus COLUMN=9:0,0,1 tests/run_collapse_test.sh` does the same on Cirrus);
+  (`MAP=cirrus COLUMN=9:0,0,1 tests/run_collapse_test.sh` does the same on Cirrus, and
+  `MAP=empyrean COLUMN=14:2,2,1 SLOW=30` on Empyrean Tower, where the two who join late
+  are dropped while the map loads: see docs/FEATURES.md, known gaps);
 - a building coming down on Cirrus (`tests/cirrus_collapse_test.gd`): each of the five
   buildings has a collapse of its own riding its island, with stretches of wall for
   columns; one piece short of Wall Share and the wall holds, one more and the corner
@@ -1023,7 +1032,7 @@ ceiling under a floor, a rug, a lamp strip, frosting on glass) break along with 
 whole block only keeps the spawn rule. The bots' navigation mesh is not rebuilt when
 something breaks. The code is `game/arena/map_destruction.gd`.
 
-**Fine destruction (the Construction Site and Cirrus).** Tick **Fine Destruction** on a
+**Fine destruction (the Construction Site, Cirrus and Empyrean Tower).** Tick **Fine Destruction** on a
 map's root and its breakable blocks break small in place of the 2 m squares; nothing
 else about making the map changes. What that turns on, a layer at a time:
 
@@ -1044,8 +1053,26 @@ else about making the map changes. What that turns on, a layer at a time:
   away from the shot or blast that broke it, with bits and dust; chunks land, lie where
   they fell and fall again if the floor under them goes. At most 120 in the air and
   160 lying of each kind. Looks only as well: each copy throws its own.
-- *Buildings that fall* (`map_collapse.gd`, below): the Construction Site's tower and
-  the five buildings on Cirrus's islands.
+- *Whole walls drawn together* (`MapDestruction._draw_lots`). A panel that stands still
+  and has no hole in it is drawn with the panels round it, all those in a cube of 32 m
+  (`LOT`) as one mesh for each kind, like the rest of the map; the first time it is
+  drawn with a hole it is blanked there (`MapMesher.blank`) and drawn on its own from
+  then on. So a map pays in draw calls for its damage, not for how much of it can
+  break: Empyrean Tower's 1,900 panels cost 5,000 draw calls a frame drawn singly, and
+  about 1,000 this way (570 with nothing breakable; `tools/perf/draw_load.sh
+  --map=empyrean --arena`). Panels that ride a mover are drawn singly from the start.
+- *Buildings that fall* (`map_collapse.gd`, below): the Construction Site's tower, the
+  five buildings on Cirrus's islands and the six tiers of Empyrean Tower.
+
+Two settings for a map built bigger than those. **Break Thickness** on the map's root
+(0.6 m): how thick a ticked wall or floor can be and still break small. Raise it for a
+map with heavy walls (Empyrean Tower: 1, for its metre of outer wall). What is thicker
+than 0.6 m breaks in pieces half as big again (`THICK_CELL`), and only a hit of 60 or
+more does it anything (`THICK_ARMOUR`: explosives, not small arms), whatever it is made
+of. **Break Scale** in the palette (a kind, and how much bigger its pieces are): for a
+map with a great deal of one surface (Empyrean Tower's floors: 1.6, which is 2.5 times
+fewer pieces). Setting up a map's panels finds what lies on what through a grid of
+buckets (`MapDestruction._panels_near`), so it stays quick with thousands of them.
 
 A thin band that runs along the faces of several breakable blocks (a slab edge, a band
 of colour round a building, across the stretches of wall between its windows) is
@@ -1088,6 +1115,13 @@ with fine destruction, at the map's origin, and tell it where the building's fra
   **To The Ground** (with **Ground**, the height of its ground floor): the ground floor
   comes down too. **Rests Share** (0.5): how much of what a thing stands on has to
   break before the thing goes.
+- **Claim**: a box. A map can have several MapFrames with the same Parts, and each
+  takes the blocks whose middle is in its Claim (the first frame that claims a block
+  has it). Empty: everything under its Parts. This is how one tall building is
+  several that fall separately (Empyrean Tower's tiers, below).
+- **Cave Share** (Held By Walls; 0 is off): a bay's floor caves in once this share of it
+  is broken. **Spans**: nodes whose floors cross open space (a bridge): each is one
+  thing, part of the storey over it, and caves in as a whole.
 
 The square of floor between four columns is a *bay*. Blow out a storey of a bay's
 outside corner column, or of any two of its columns, and that floor of the bay falls
@@ -1113,7 +1147,7 @@ pieces are (at most 25 KB a second for each player, the big pieces first); a cop
 compares that with where it had the piece at the same moment of its own fall and takes
 the difference out, so nothing snaps back in time. When the host's pile is still it
 sends where every piece ended, every copy slides its pieces there over half a second,
-and the pile becomes one fixed body: part of the level, the same for everyone, with
+and the pile becomes one fixed body (the slide ends exactly on the host's numbers, so the piles match to the last bit): part of the level, the same for everyone, with
 the bots' navigation laid over it. A player who joins during or after a fall is sent
 the same. Someone under a big piece coming down fast is killed, and the kill goes to
 whoever blew the column. Nobody spawns in or under a bay that has come down. A killcam
@@ -1135,6 +1169,20 @@ takes its own stretch down with it (`MapCollapse._by_bay`). And each piece is ti
 outwards from the middle of its bay as it lets go (`_topple`, the same on every copy):
 a wall cut loose over the wall it stood on would otherwise stay there, a stack of
 loose blocks that looks like a wall.
+
+Three more rules, for a plan that is not a neat grid of rooms (a round tower under a
+square grid of lines has bays with one stretch of wall, or none). They are in
+`MapCollapse.flush`, the same for every map:
+
+- A bay that has lost one corner and has no other left standing falls (a bay held by a
+  single stretch of wall goes when that goes).
+- A floor with no wall of its own under it (the middle of a hall) falls once two of the
+  floors beside it have, or the only one it has.
+- **Cave Share**: a bay's floor that has lost that share of its pieces caves in, with
+  everything over it. A floor of fewer than 16 pieces in a bay does not count
+  (`CAVE_CELLS`), unless the bay has no wall at all. A bridge named in **Spans** is
+  counted whole, wherever the lines cut it, and takes down only the bays that at least
+  15% of it lies in (`SPAN_SHARE`): its ends take no rooms with them.
 
 **All of such a building breaks.** Nothing in it is protected (no cell is kept because
 something stands on it or a spawn point is near), and every ticked thin box in it
@@ -1158,11 +1206,16 @@ at a corner and that corner is rubble on the ground, stairs and furniture includ
 do it all the way round and nothing of the building stands. What is outside every bay
 (a porch, an awning) belongs to the bay it stands against.
 
-Drawing: the loose things of a building with columns are one lot. A building held up
-by its walls has two lots for each bay, what stays put until the bay falls and what
-can go on its own, so that losing a planter with its bit of roof draws a handful of
-things again (`_lot_mesh`, `_show_lot`), and the drawing ahead of a collapse is done a
-lot a frame. A copy that joins after a fall makes every piece and then drops the ones
+Drawing: the loose things of a building with columns are one lot, and a building held
+up by its walls is cut into lots of 8 bays a side (`LOT_BAYS`: a tier of Empyrean Tower
+is one), each a mesh for each kind. A lot is drawn when the map is made and when it is
+mended, and at no other time: a furnished room is tens of milliseconds to draw (the
+mesher is GDScript, and one bevelled block is several), which would hold the game up.
+In its place each lot knows where in its meshes each thing is, and a thing that goes
+(with the floor under it, or with its bay in a collapse) is blanked there: its corners
+are all put at one point, a write of a few bytes to the mesh (`MapCollapse._hide`,
+`MapMesher.blank`; `MapMesher.add_to` builds a mesh a thing at a time so the places
+are known). A copy that joins after a fall makes every piece and then drops the ones
 the host's poses do not have (`_absent`), so its heap is the host's.
 
 **On an island that flies.** Put the MapFrame inside the MapMover or MapIsland, with
@@ -1172,7 +1225,9 @@ is still the first). Everything about a fall is then worked out in the island's 
 the pieces, the host's news, where they rest and the pile, which is a body that moves
 with the island. So a building brought down on a gliding island falls where the island
 is, and its heap goes where the island goes. Pieces that go over the edge are gone
-(hidden four metres under the map's kill height, and left out of the pile). An island
+(hidden four metres under the map's kill height, and left out of the pile; the same on
+any map, for what falls out of a tower). On a map with gravity zones a falling piece
+and a chunk of rubble weigh what things weigh where they are (`WorldGravity.zone_at`). An island
 that goes below the map takes any fall in progress with it (it ends there and then,
 for everyone), and when it comes back mended the building is rebuilt: bays, walls and
 heap (`MapCollapse.mend`, called from `MapRoot.mend`). Each collapse numbers its
@@ -1180,8 +1235,8 @@ events from its index times 100,000, so a message about a fall says whose it is
 (`MapRoot.collapse_of`), and the column messages carry the index.
 
 What it costs to draw: the columns that still stand are one mesh for each kind (made
-again when one goes, which is quick), everything loose in the building is another (made
-again when a bay goes), and a pile is one mesh for each material once it is still. In a pile every vertex remembers where
+again when one goes, which is quick), everything loose in the building is another
+(blanked a thing at a time as bays go: see "Drawing" above), and a pile is one mesh for each material once it is still. In a pile every vertex remembers where
 it was before the fall, and `map_surface.gdshader` measures the pattern from there, so
 blockwork stays blockwork on a piece lying on its side and nothing changes as the pile
 sets. From four places round the site the map draws about a tenth more objects than
@@ -1189,9 +1244,8 @@ it did before fine destruction, and no more after three bays have come down.
 
 What it costs in time: the frame in which a column goes does almost nothing (about
 2 ms here). Cutting the bay up (`_plan`) and making the pieces are spread over the
-warning, a few milliseconds a tick, and the loose things are drawn as they will be
-after the fall, hidden, before it starts (`_draw_ahead`), so the moment it lets go
-only has to mark the cells fallen and swap the drawings. A graphics card builds what it
+warning, a few milliseconds a tick, so the moment it lets go only has to mark the
+cells fallen and blank what stood in those bays where it is drawn (`_hide`). A graphics card builds what it
 needs for each new sort of surface the first time one is drawn, which can hold the
 game up for a moment, so `FxWarmup` (`game/arena/fx_warmup.gd`) draws one of
 everything a first hit would be the first to draw (on every map, each part of an
@@ -1689,7 +1743,8 @@ Things to keep true when editing it:
   **Detail Chunk** metres so that works). Its sun's shadow reaches 150 m in two steps.
   A MapMagic box is not drawn beyond its **Draw Range** (90 m). `tools/perf/draw_load.sh
   --map=empyrean` counts the triangles and draw calls in a frame from six viewpoints
-  (about 630,000 and 570; before these settings 1,730,000 and 600).
+  (about 630,000 and 570; before these settings 1,730,000 and 600). Add `--arena` to
+  count it as a match has it, with what breaks set up to break (about 550,000 and 990).
 - Bots: its navigation mesh has about 8,800 polygons, more than the navigation server
   will search by default (4,096), which is why `BotBrain._nav_path` asks with a higher
   limit. `godot --headless --path . --script tools/perf/bot_load.gd -- --perf-map=empyrean`
@@ -1701,6 +1756,34 @@ Things to keep true when editing it:
 - Lighting is the ambient light, the sun and the glowing kinds; there are no light nodes.
   The sky is the preset `game/maps/sky/maps/empyrean.tres` (see "Skies"); the fog is height fog under the tower
   only (the burn layer's haze).
+
+**What breaks.** The tower has fine destruction (see "Fine destruction" above), with
+Break Thickness 1. Every solid, drawn box of stone wall, of storey, tier and hall
+floor, of the outer wall, the balconies and the shaft's bridges is ticked Breakable
+(about 1,900 blocks, some 119,000 pieces): `python3 tools/arena/empyrean_destruction.py`
+ticked them, wrote the palette's toughness and Break Scale (the floors' pieces are 1.6
+times bigger: the tower has some 37,000 m² of floor) and the frames below, and can be
+run again after changing the tower (a second run changes nothing). Interior walls are
+masonry: bullets chew through them slowly and a rocket takes a bite. Floors are
+concrete to the engine: small arms only mark them. The outer wall is a metre thick, so
+only explosives break it, in pieces about a metre across; four rockets make a breach. The curved blocks of the Grand Library's shelves and the ribs
+outside the wall are not boxes and do not break.
+
+Each tier is a building of its own: six **Frame** nodes (`FrameArcaneEngine` to
+`FrameObservatory`, children of the map), each Held By Walls and To The Ground on a
+square grid of bays about 7.5 m across laid over the round plan (8, 8, 7, 7, 6 and 6
+bays a side), with levels at its three storeys and its upper hall. All six have the
+same Parts (the tier nodes, the balconies and the bridges) and each has a **Claim**
+from a metre under its floor to a metre under the next, so a tier's rooms, storeys and
+upper hall can come down, a section at a time, while the tier floor it stands on only
+breaks: nothing ever falls from one tier into the next, and the tower always stands.
+Blow out the wall round a section and its three storeys pancake onto the tier floor;
+blow out the outer wall's stretches at the rim and that section goes with its piece of
+the outer wall, leaving the tower open to space. **Cave Share** is 0.4 and the bridges
+are **Spans**: shoot away 40% of a bridge (three rockets) and it drops down the shaft.
+What falls out of the tower drifts in the 40% gravity outside and is gone at the burn
+layer. A spawn point is closed only by a fall in its own tier.
+`tests/empyrean_destruction_test.gd` checks it.
 
 ### Haunted House
 
